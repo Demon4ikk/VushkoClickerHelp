@@ -1,4 +1,5 @@
 import logging
+import os
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -8,15 +9,25 @@ from telegram.ext import (
     filters,
 )
 
-# --- НАСТРОЙКИ ---
-# ВАЖНО: Хранить токен в коде небезопасно. Используйте переменные окружения для хостинга.
-BOT_TOKEN = "8842080090:AAGBOZSprRVSt5SQMCX5J8aldlXQdu85Zxk"
+# --- НАСТРОЙКИ (теперь из переменных окружения) ---
 
-# ID администраторов через запятую
-ADMIN_IDS = [1785945953]
+# Токен вашего бота. Получается из переменной окружения BOT_TOKEN.
+BOT_TOKEN = os.getenv("BOT_TOKEN")
 
-# ID приватной группы для администраторов
-ADMIN_GROUP_ID = -5393073455
+# ID администраторов. Получается из переменной окружения ADMIN_IDS (числа через запятую).
+admin_ids_str = os.getenv("ADMIN_IDS", "")
+ADMIN_IDS = [int(admin_id) for admin_id in admin_ids_str.split(",") if admin_id]
+
+# ID приватной группы для администраторов. Получается из переменной окружения ADMIN_GROUP_ID.
+try:
+    ADMIN_GROUP_ID = int(os.getenv("ADMIN_GROUP_ID"))
+except (TypeError, ValueError):
+    ADMIN_GROUP_ID = 0
+
+# Проверка, что все переменные окружения установлены, иначе бот не запустится
+if not all([BOT_TOKEN, ADMIN_IDS, ADMIN_GROUP_ID]):
+    # Эта ошибка будет видна в логах на сервере, если вы забудете что-то указать
+    raise RuntimeError("Не все переменные окружения установлены! (BOT_TOKEN, ADMIN_IDS, ADMIN_GROUP_ID)")
 
 # --- КОНЕЦ НАСТРОЕК ---
 
