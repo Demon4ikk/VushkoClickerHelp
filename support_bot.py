@@ -2,6 +2,9 @@ import logging
 import os
 import nest_asyncio
 
+import asyncio
+from aiohttp import web
+
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -41,6 +44,33 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
+
+# --- Веб-сервер для Health Check ---
+
+async def health_check(request: web.Request) -> web.Response:
+    """Отвечает на health-check от Render, чтобы сервис считался 'живым'."""
+    return web.Response(text="OK")
+
+async def run_web_server():
+    """Запускает простой веб-сервер для ответов на health-check."""
+    # Render предоставляет порт через переменную окружения PORT
+    port = int(os.environ.get("PORT", 8080))
+    
+    app = web.Application()
+    app.add_routes([web.get("/", health_check)])
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    
+    try:
+        await site.start()
+        logger.info(f"Health check web server started on port {port}")
+        # Эта корутина должна работать вечно, пока ее не отменят
+        await asyncio.Event().wait()
+    finally:
+        await runner.cleanup()
+        logger.info("Web server stopped.")
 
 # Функция для команды /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -156,9 +186,11 @@ def main() -> None:
         filters.TEXT & ~filters.COMMAND, 
         forward_to_admins
     ))
-
-    # Запускаем бота
-    application.run_polling()
+    
+    # Запускаем поллинг бота и веб-сервер параллельно.
+    # run_polling сама управляет асинхронным циклом.
+    logger.info("Starting bot and web server...")
+    application.run_polling(other_coroutines=[run_web_server()])
 
 if __name__ == "__main__":
     main()
