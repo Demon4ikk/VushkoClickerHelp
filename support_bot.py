@@ -167,7 +167,7 @@ async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text(f"❌ Не удалось отправить ответ. Ошибка: {e}")
 
 
-def main() -> None:
+async def main() -> None:
     """Основная функция для запуска бота."""
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -187,10 +187,15 @@ def main() -> None:
         forward_to_admins
     ))
     
-    # Запускаем поллинг бота и веб-сервер параллельно.
-    # run_polling сама управляет асинхронным циклом.
-    logger.info("Starting bot and web server...")
-    application.run_polling(other_coroutines=[run_web_server()])
+    # Используем контекстный менеджер, который управляет запуском и остановкой.
+    async with application:
+        # Запускаем поллинг в фоновом режиме
+        await application.start()
+        await application.updater.start_polling()
+        logger.info("Bot polling started...")
+        
+        # Запускаем веб-сервер. Он будет работать, пока процесс не будет остановлен.
+        await run_web_server()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
