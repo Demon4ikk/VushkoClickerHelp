@@ -1,5 +1,7 @@
 import logging
 import os
+import nest_asyncio
+
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -8,6 +10,9 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+
+# Патч для решения проблемы с event loop в некоторых средах, включая Render
+nest_asyncio.apply()
 
 # --- НАСТРОЙКИ (теперь из переменных окружения) ---
 
