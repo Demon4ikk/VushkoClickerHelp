@@ -128,52 +128,70 @@ async def forward_to_admins(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 # Функция для ответа администратора пользователю
 async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отправляет ответ от админа пользователю."""
+    logger.info("Получено сообщение в группе поддержки. Проверяем, является ли оно ответом админа...")
     # Проверяем, что это админ отвечает в админской группе
     if update.message.chat_id != ADMIN_GROUP_ID or update.message.from_user.id not in ADMIN_IDS:
+        # Это сообщение не от админа или не в той группе, игнорируем
         return
 
     # Проверяем, что это ответ на сообщение
     if not update.message.reply_to_message:
-        await update.message.reply_text("Чтобы ответить пользователю, используйте функцию «Ответить» (Reply) на его сообщение.")
+        logger.info("Сообщение в группе от админа, но не является ответом. Игнорируем.")
         return
 
+    logger.info("Сообщение является ответом. Пытаемся извлечь ID пользователя для ответа.")
     # Пытаемся извлечь ID пользователя из заголовка или пересланного сообщения
     user_id_to_reply = None
+    replied_message = update.message.reply_to_message
     
     # Вариант 1: Ответ на наш заголовок с ID
-    if update.message.reply_to_message.text and "ID:" in update.message.reply_to_message.text:
+    if replied_message.text and "ID:" in replied_message.text and replied_message.from_user.is_bot:
         try:
             # Ищем строку "ID: `123456789`" и извлекаем число
-            text = update.message.reply_to_message.text
+            text = replied_message.text
             user_id_str = text.split("ID: `")[1].split("`")[0]
             user_id_to_reply = int(user_id_str)
+            logger.info(f"ID пользователя {user_id_to_reply} извлечен из заголовка.")
         except (IndexError, ValueError):
-            await update.message.reply_text("Не удалось извлечь ID пользователя из заголовка. Попробуйте ответить на пересланное сообщение.")
+            logger.warning("Не удалось извлечь ID из заголовка, хотя он выглядел правильным.")
+            await update.message.reply_text("⚠️ Не удалось извлечь ID пользователя из заголовка. Попробуйте ответить на пересланное сообщение.")
             return
 
     # Вариант 2: Ответ на пересланное сообщение
-    elif update.message.reply_to_message.forward_from:
-        user_id_to_reply = update.message.reply_to_message.forward_from.id
+    elif replied_message.forward_from:
+        user_id_to_reply = replied_message.forward_from.id
+        logger.info(f"ID пользователя {user_id_to_reply} извлечен из пересланного сообщения.")
     
     if not user_id_to_reply:
-        await update.message.reply_text("Не могу определить, какому пользователю отвечать. Убедитесь, что отвечаете на правильное сообщение.")
+        logger.warning("Не удалось определить ID пользователя. Возможно, у пользователя включены настройки приватности.")
+        await update.message.reply_text(
+            "⚠️ Не могу определить, какому пользователю отвечать.\n\n"
+            "Возможная причина: у пользователя включены настройки приватности для пересылки сообщений. "
+            "В этом случае, пожалуйста, отвечайте на сообщение-заголовок (где указан ID), а не на пересланное сообщение."
+        )
         return
 
-    # Отправляем ответ пользователю
+    # Отправляем ответ пользователю.
+    # Сначала отправляем заголовок, а потом копируем сообщение админа,
+    # чтобы можно было отправлять не только текст, но и фото, стикеры и т.д.
     try:
         admin_name = update.message.from_user.full_name
-        reply_text = f"💬 Ответ от поддержки ({admin_name}):\n\n{update.message.text}"
+        logger.info(f"Отправляем ответ от {admin_name} пользователю {user_id_to_reply}.")
         
         await context.bot.send_message(
             chat_id=user_id_to_reply,
-            text=reply_text
+            text=f"💬 Ответ от поддержки ({admin_name}):"
         )
+        
+        # Копируем сообщение админа (с текстом, фото, стикером и т.д.) пользователю
+        await update.message.copy(chat_id=user_id_to_reply)
+
         # Уведомляем админа, что ответ успешно отправлен
         await update.message.reply_text("✅ Ответ успешно отправлен пользователю.")
+        logger.info(f"Ответ пользователю {user_id_to_reply} успешно отправлен.")
     except Exception as e:
-        logger.error(f"Ошибка при отправке ответа пользователю {user_id_to_reply}: {e}")
+        logger.error(f"Ошибка при отправке ответа пользователю {user_id_to_reply}: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Не удалось отправить ответ. Ошибка: {e}")
-
 
 async def main() -> None:
     """Основная функция для запуска бота."""
@@ -185,13 +203,13 @@ async def main() -> None:
     # Добавляем обработчик для ответов админов в группе
     # Он должен стоять ПЕРЕД обработчиком сообщений от пользователей
     application.add_handler(MessageHandler(
-        filters.Chat(chat_id=ADMIN_GROUP_ID) & filters.REPLY & filters.TEXT & ~filters.COMMAND,
+        filters.Chat(chat_id=ADMIN_GROUP_ID) & filters.REPLY & ~filters.COMMAND,
         reply_to_user
     ))
 
-    # Добавляем обработчик для всех остальных текстовых сообщений от пользователей
+    # Добавляем обработчик для всех сообщений от пользователей в личке (кроме команд)
     application.add_handler(MessageHandler(
-        filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, 
+        filters.ChatType.PRIVATE & ~filters.COMMAND, 
         forward_to_admins
     ))
     
