@@ -117,43 +117,39 @@ async def forward_to_admins(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         
         # Отправляем заголовок в админский чат
         logger.info(f"Пересылка сообщения в группу {ADMIN_GROUP_ID}")
-        header_message = await context.bot.send_message(
-            chat_id=ADMIN_GROUP_ID,
-            text=header,
-        )
-        # Копируем сообщение пользователя как ответ на заголовок, создавая ветку
-        await context.bot.copy_message(
-            chat_id=ADMIN_GROUP_ID,
-            from_chat_id=user.id,
-            message_id=message.message_id,
-            reply_to_message_id=header_message.message_id
-        )
+
+        # Если сообщение пользователя текстовое, объединяем заголовок и текст в одно сообщение
+        if message.text:
+            full_message_text = f"{header}\n\n{message.text}"
+            await context.bot.send_message(
+                chat_id=ADMIN_GROUP_ID,
+                text=full_message_text
+            )
+        # Если сообщение пользователя медиа (фото, видео, документ, стикер и т.д.),
+        # копируем его, добавляя заголовок в подпись
+        else:
+            original_caption = message.caption or ""
+            new_caption = f"{header}\n\n{original_caption}".strip()
+            await context.bot.copy_message(
+                chat_id=ADMIN_GROUP_ID,
+                from_chat_id=user.id,
+                message_id=message.message_id,
+                caption=new_caption # Добавляем заголовок в подпись
+            )
         
         await update.message.reply_text("✅ Ваше сообщение отправлено в поддержку. Ожидайте, пожалуйста, ответа.")
-        logger.info(f"Сообщение от {user.id} успешно скопировано в группу. Пользователю отправлено подтверждение.")
+        logger.info(f"Сообщение от {user.id} успешно отправлено в группу. Пользователю отправлено подтверждение.")
     except Exception as e:
         logger.error(f"Ошибка при пересылке сообщения от {user.id}: {e}", exc_info=True)
         await update.message.reply_text("Произошла внутренняя ошибка при отправке вашего сообщения. Мы уже уведомлены и работаем над решением.")
 
 def _extract_user_id_from_thread(message: 'telegram.Message') -> int | None:
     """
-    Проходит по цепочке ответов, чтобы найти исходное сообщение-заголовок от бота
-    и извлечь из него ID пользователя.
+    Извлекает ID пользователя из текста или подписи сообщения, на которое ответил администратор.
     """
-    header_message = None
-    
-    # Вариант 1: Ответ на само сообщение-заголовок
-    if message.text and "ID:" in message.text and message.from_user.is_bot:
-        header_message = message
-        
-    # Вариант 2: Ответ на скопированное сообщение (которое является ответом на заголовок)
-    elif message.reply_to_message:
-        potential_header = message.reply_to_message
-        if potential_header.text and "ID:" in potential_header.text and potential_header.from_user.is_bot:
-            header_message = potential_header
-
-    if header_message:
-        match = re.search(r"ID: `(\d+)`", header_message.text)
+    content_to_search = message.text or message.caption
+    if content_to_search:
+        match = re.search(r"ID: `(\d+)`", content_to_search)
         if match:
             return int(match.group(1))
     return None
