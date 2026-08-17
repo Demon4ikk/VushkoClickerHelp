@@ -111,7 +111,6 @@ async def forward_to_admins(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         header_message = await context.bot.send_message(
             chat_id=ADMIN_GROUP_ID,
             text=header,
-            parse_mode='Markdown'
         )
         # Копируем сообщение пользователя как ответ на заголовок, создавая ветку
         await context.bot.copy_message(
