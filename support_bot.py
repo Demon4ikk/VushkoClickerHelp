@@ -108,20 +108,21 @@ async def forward_to_admins(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         
         # Отправляем заголовок в админский чат
         logger.info(f"Пересылка сообщения в группу {ADMIN_GROUP_ID}")
-        await context.bot.send_message(
+        header_message = await context.bot.send_message(
             chat_id=ADMIN_GROUP_ID,
             text=header,
             parse_mode='Markdown'
         )
-        # Пересылаем само сообщение пользователя
-        await context.bot.forward_message(
+        # Копируем сообщение пользователя как ответ на заголовок, создавая ветку
+        await context.bot.copy_message(
             chat_id=ADMIN_GROUP_ID,
             from_chat_id=user.id,
-            message_id=message.message_id
+            message_id=message.message_id,
+            reply_to_message_id=header_message.message_id
         )
         
         await update.message.reply_text("✅ Ваше сообщение отправлено в поддержку. Ожидайте, пожалуйста, ответа.")
-        logger.info(f"Сообщение от {user.id} успешно переслано. Пользователю отправлено подтверждение.")
+        logger.info(f"Сообщение от {user.id} успешно скопировано в группу. Пользователю отправлено подтверждение.")
     except Exception as e:
         logger.error(f"Ошибка при пересылке сообщения от {user.id}: {e}", exc_info=True)
         await update.message.reply_text("Произошла внутренняя ошибка при отправке вашего сообщения. Мы уже уведомлены и работаем над решением.")
@@ -143,34 +144,37 @@ async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     logger.info("Сообщение является ответом. Пытаемся извлечь ID пользователя для ответа.")
     # Пытаемся извлечь ID пользователя из заголовка или пересланного сообщения
     user_id_to_reply = None
-    replied_message = update.message.reply_to_message
+    message_replied_to_by_admin = update.message.reply_to_message
     
-    # Вариант 1: Ответ на наш заголовок с ID
-    if replied_message.text and "ID:" in replied_message.text and replied_message.from_user.is_bot:
-        # Используем регулярное выражение для надежного извлечения ID
-        match = re.search(r"ID: `(\d+)`", replied_message.text)
+    # Ищем исходное сообщение-заголовок, двигаясь вверх по цепочке ответов
+    header_message = None
+    
+    # Вариант 1: Админ ответил прямо на сообщение-заголовок
+    if message_replied_to_by_admin.text and "ID:" in message_replied_to_by_admin.text and message_replied_to_by_admin.from_user.is_bot:
+        header_message = message_replied_to_by_admin
+        logger.info("Админ ответил на сообщение-заголовок.")
+        
+    # Вариант 2: Админ ответил на скопированное сообщение пользователя (которое является ответом на заголовок)
+    elif message_replied_to_by_admin.reply_to_message:
+        potential_header = message_replied_to_by_admin.reply_to_message
+        if potential_header.text and "ID:" in potential_header.text and potential_header.from_user.is_bot:
+            header_message = potential_header
+            logger.info("Админ ответил на скопированное сообщение. Заголовок найден в родительском сообщении.")
+
+    # Если заголовок найден, извлекаем ID
+    if header_message:
+        match = re.search(r"ID: `(\d+)`", header_message.text)
         if match:
             user_id_to_reply = int(match.group(1))
-            logger.info(f"ID пользователя {user_id_to_reply} извлечен из заголовка с помощью regex.")
+            logger.info(f"ID пользователя {user_id_to_reply} извлечен из заголовка.")
         else:
-            # Если regex не сработал, значит, что-то не так с форматом заголовка
-            logger.warning("Не удалось извлечь ID из заголовка, хотя он выглядел правильным. Regex не нашел совпадения.")
-            await update.message.reply_text("⚠️ Не удалось извлечь ID пользователя из заголовка. Попробуйте ответить на пересланное сообщение.")
-            return
-
-    # Вариант 2: Ответ на пересланное сообщение
-    elif replied_message.forward_origin:
-        # В новых версиях библиотеки информация о пересылке хранится в forward_origin
-        if isinstance(replied_message.forward_origin, MessageOriginUser):
-            user_id_to_reply = replied_message.forward_origin.sender_user.id
-            logger.info(f"ID пользователя {user_id_to_reply} извлечен из пересланного сообщения (forward_origin).")
+            logger.warning("Не удалось извлечь ID из сообщения, похожего на заголовок. Regex не нашел совпадения.")
     
     if not user_id_to_reply:
-        logger.warning("Не удалось определить ID пользователя. Возможно, у пользователя включены настройки приватности.")
+        logger.warning("Не удалось определить ID пользователя. Не найдено сообщение-заголовок в цепочке ответов.")
         await update.message.reply_text(
             "⚠️ Не могу определить, какому пользователю отвечать.\n\n"
-            "Возможная причина: у пользователя включены настройки приватности для пересылки сообщений. "
-            "В этом случае, пожалуйста, отвечайте на сообщение-заголовок (где указан ID), а не на пересланное сообщение."
+            "Пожалуйста, используйте функцию «Ответить» на любое сообщение от бота в ветке обращения."
         )
         return
 
