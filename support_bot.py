@@ -2,10 +2,11 @@ import logging
 import os
 import nest_asyncio
 
+import re
 import asyncio
 from aiohttp import web
 
-from telegram import Update
+from telegram import Update, MessageOriginUser
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -146,21 +147,23 @@ async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     # Вариант 1: Ответ на наш заголовок с ID
     if replied_message.text and "ID:" in replied_message.text and replied_message.from_user.is_bot:
-        try:
-            # Ищем строку "ID: `123456789`" и извлекаем число
-            text = replied_message.text
-            user_id_str = text.split("ID: `")[1].split("`")[0]
-            user_id_to_reply = int(user_id_str)
-            logger.info(f"ID пользователя {user_id_to_reply} извлечен из заголовка.")
-        except (IndexError, ValueError):
-            logger.warning("Не удалось извлечь ID из заголовка, хотя он выглядел правильным.")
+        # Используем регулярное выражение для надежного извлечения ID
+        match = re.search(r"ID: `(\d+)`", replied_message.text)
+        if match:
+            user_id_to_reply = int(match.group(1))
+            logger.info(f"ID пользователя {user_id_to_reply} извлечен из заголовка с помощью regex.")
+        else:
+            # Если regex не сработал, значит, что-то не так с форматом заголовка
+            logger.warning("Не удалось извлечь ID из заголовка, хотя он выглядел правильным. Regex не нашел совпадения.")
             await update.message.reply_text("⚠️ Не удалось извлечь ID пользователя из заголовка. Попробуйте ответить на пересланное сообщение.")
             return
 
     # Вариант 2: Ответ на пересланное сообщение
-    elif replied_message.forward_from:
-        user_id_to_reply = replied_message.forward_from.id
-        logger.info(f"ID пользователя {user_id_to_reply} извлечен из пересланного сообщения.")
+    elif replied_message.forward_origin:
+        # В новых версиях библиотеки информация о пересылке хранится в forward_origin
+        if isinstance(replied_message.forward_origin, MessageOriginUser):
+            user_id_to_reply = replied_message.forward_origin.sender_user.id
+            logger.info(f"ID пользователя {user_id_to_reply} извлечен из пересланного сообщения (forward_origin).")
     
     if not user_id_to_reply:
         logger.warning("Не удалось определить ID пользователя. Возможно, у пользователя включены настройки приватности.")
