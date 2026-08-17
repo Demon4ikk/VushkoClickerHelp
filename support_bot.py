@@ -40,6 +40,9 @@ if not all([BOT_TOKEN, ADMIN_IDS, ADMIN_GROUP_ID]):
 
 # --- КОНЕЦ НАСТРОЕК ---
 
+# Временное хранилище заблокированных пользователей (ID). При перезапуске сбрасывается.
+MUTED_USERS = set()
+
 # Включаем логирование, чтобы видеть ошибки
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
@@ -91,6 +94,12 @@ async def forward_to_admins(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Пересылает сообщение пользователя в админский чат."""
     user = update.effective_user
     message = update.message
+
+    # Проверяем, не замучен ли пользователь
+    if user.id in MUTED_USERS:
+        logger.info(f"Получено сообщение от заблокированного пользователя {user.id}. Игнорируем.")
+        return # Молча игнорируем
+
     logger.info(f"Получено сообщение от пользователя {user.full_name} (ID: {user.id})")
 
     # Не пересылаем сообщения от админов, чтобы избежать путаницы
@@ -126,6 +135,29 @@ async def forward_to_admins(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         logger.error(f"Ошибка при пересылке сообщения от {user.id}: {e}", exc_info=True)
         await update.message.reply_text("Произошла внутренняя ошибка при отправке вашего сообщения. Мы уже уведомлены и работаем над решением.")
 
+def _extract_user_id_from_thread(message: 'telegram.Message') -> int | None:
+    """
+    Проходит по цепочке ответов, чтобы найти исходное сообщение-заголовок от бота
+    и извлечь из него ID пользователя.
+    """
+    header_message = None
+    
+    # Вариант 1: Ответ на само сообщение-заголовок
+    if message.text and "ID:" in message.text and message.from_user.is_bot:
+        header_message = message
+        
+    # Вариант 2: Ответ на скопированное сообщение (которое является ответом на заголовок)
+    elif message.reply_to_message:
+        potential_header = message.reply_to_message
+        if potential_header.text and "ID:" in potential_header.text and potential_header.from_user.is_bot:
+            header_message = potential_header
+
+    if header_message:
+        match = re.search(r"ID: `(\d+)`", header_message.text)
+        if match:
+            return int(match.group(1))
+    return None
+
 # Функция для ответа администратора пользователю
 async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Отправляет ответ от админа пользователю."""
@@ -142,35 +174,10 @@ async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     logger.info("Сообщение является ответом. Пытаемся извлечь ID пользователя для ответа.")
     # Пытаемся извлечь ID пользователя из заголовка или пересланного сообщения
-    user_id_to_reply = None
-    message_replied_to_by_admin = update.message.reply_to_message
-    
-    # Ищем исходное сообщение-заголовок, двигаясь вверх по цепочке ответов
-    header_message = None
-    
-    # Вариант 1: Админ ответил прямо на сообщение-заголовок
-    if message_replied_to_by_admin.text and "ID:" in message_replied_to_by_admin.text and message_replied_to_by_admin.from_user.is_bot:
-        header_message = message_replied_to_by_admin
-        logger.info("Админ ответил на сообщение-заголовок.")
-        
-    # Вариант 2: Админ ответил на скопированное сообщение пользователя (которое является ответом на заголовок)
-    elif message_replied_to_by_admin.reply_to_message:
-        potential_header = message_replied_to_by_admin.reply_to_message
-        if potential_header.text and "ID:" in potential_header.text and potential_header.from_user.is_bot:
-            header_message = potential_header
-            logger.info("Админ ответил на скопированное сообщение. Заголовок найден в родительском сообщении.")
-
-    # Если заголовок найден, извлекаем ID
-    if header_message:
-        match = re.search(r"ID: `(\d+)`", header_message.text)
-        if match:
-            user_id_to_reply = int(match.group(1))
-            logger.info(f"ID пользователя {user_id_to_reply} извлечен из заголовка.")
-        else:
-            logger.warning("Не удалось извлечь ID из сообщения, похожего на заголовок. Regex не нашел совпадения.")
+    user_id_to_reply = _extract_user_id_from_thread(update.message.reply_to_message)
     
     if not user_id_to_reply:
-        logger.warning("Не удалось определить ID пользователя. Не найдено сообщение-заголовок в цепочке ответов.")
+        logger.warning("Не удалось определить ID пользователя для ответа. Не найдено сообщение-заголовок в цепочке ответов.")
         await update.message.reply_text(
             "⚠️ Не могу определить, какому пользователю отвечать.\n\n"
             "Пожалуйста, используйте функцию «Ответить» на любое сообщение от бота в ветке обращения."
@@ -181,16 +188,25 @@ async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Сначала отправляем заголовок, а потом копируем сообщение админа,
     # чтобы можно было отправлять не только текст, но и фото, стикеры и т.д.
     try:
-        admin_name = update.message.from_user.full_name
-        logger.info(f"Отправляем ответ от {admin_name} пользователю {user_id_to_reply}.")
-        
-        await context.bot.send_message(
-            chat_id=user_id_to_reply,
-            text=f"💬 Ответ от поддержки ({admin_name}):"
-        )
-        
-        # Копируем сообщение админа (с текстом, фото, стикером и т.д.) пользователю
-        await update.message.copy(chat_id=user_id_to_reply)
+        admin_reply_message = update.message
+        header_text = "💬 Ответ от поддержки:"
+        logger.info(f"Отправляем ответ пользователю {user_id_to_reply}.")
+
+        # Если админ ответил текстом, отправляем одно сообщение
+        if admin_reply_message.text:
+            full_text = f"{header_text}\n\n{admin_reply_message.text}"
+            await context.bot.send_message(
+                chat_id=user_id_to_reply,
+                text=full_text
+            )
+        # Если админ ответил медиа, стикером и т.д., копируем сообщение с заголовком в подписи
+        else:
+            original_caption = admin_reply_message.caption or ""
+            new_caption = f"{header_text}\n\n{original_caption}".strip()
+            await admin_reply_message.copy(
+                chat_id=user_id_to_reply,
+                caption=new_caption
+            )
 
         # Уведомляем админа, что ответ успешно отправлен
         await update.message.reply_text("✅ Ответ успешно отправлен пользователю.")
@@ -199,6 +215,57 @@ async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error(f"Ошибка при отправке ответа пользователю {user_id_to_reply}: {e}", exc_info=True)
         await update.message.reply_text(f"❌ Не удалось отправить ответ. Ошибка: {e}")
 
+async def mute_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Блокирует пользователя, запрещая ему отправлять сообщения боту."""
+    user_id_to_mute = None
+    
+    # Способ 1: /mute <user_id>
+    if context.args:
+        try:
+            user_id_to_mute = int(context.args[0])
+        except (IndexError, ValueError):
+            await update.message.reply_text("⚠️ Неверный формат. Используйте /mute <ID> или ответьте на сообщение командой /mute.")
+            return
+            
+    # Способ 2: Ответить на сообщение в ветке командой /mute
+    elif update.message.reply_to_message:
+        user_id_to_mute = _extract_user_id_from_thread(update.message.reply_to_message)
+
+    if not user_id_to_mute:
+        await update.message.reply_text("⚠️ Не удалось определить пользователя для блокировки. Используйте /mute <ID> или ответьте на его сообщение.")
+        return
+
+    MUTED_USERS.add(user_id_to_mute)
+    logger.info(f"Администратор {update.message.from_user.id} заблокировал пользователя {user_id_to_mute}.")
+    await update.message.reply_text(f"✅ Пользователь с ID `{user_id_to_mute}` заблокирован.")
+
+async def unmute_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Разблокирует пользователя."""
+    user_id_to_unmute = None
+    
+    # Способ 1: /unmute <user_id>
+    if context.args:
+        try:
+            user_id_to_unmute = int(context.args[0])
+        except (IndexError, ValueError):
+            await update.message.reply_text("⚠️ Неверный формат. Используйте /unmute <ID> или ответьте на сообщение командой /unmute.")
+            return
+            
+    # Способ 2: Ответить на сообщение в ветке командой /unmute
+    elif update.message.reply_to_message:
+        user_id_to_unmute = _extract_user_id_from_thread(update.message.reply_to_message)
+
+    if not user_id_to_unmute:
+        await update.message.reply_text("⚠️ Не удалось определить пользователя для разблокировки. Используйте /unmute <ID> или ответьте на его сообщение.")
+        return
+
+    if user_id_to_unmute in MUTED_USERS:
+        MUTED_USERS.remove(user_id_to_unmute)
+        logger.info(f"Администратор {update.message.from_user.id} разблокировал пользователя {user_id_to_unmute}.")
+        await update.message.reply_text(f"✅ Пользователь с ID `{user_id_to_unmute}` разблокирован.")
+    else:
+        await update.message.reply_text(f"ℹ️ Пользователь с ID `{user_id_to_unmute}` не найден в списке заблокированных.")
+
 async def main() -> None:
     """Основная функция для запуска бота."""
     application = Application.builder().token(BOT_TOKEN).build()
@@ -206,10 +273,16 @@ async def main() -> None:
     # Добавляем обработчик команды /start
     application.add_handler(CommandHandler("start", start))
 
+    # Команды для администрирования (доступны только админам в группе поддержки)
+    admin_commands_filter = filters.Chat(chat_id=ADMIN_GROUP_ID) & filters.User(user_id=ADMIN_IDS)
+    application.add_handler(CommandHandler("mute", mute_user, filters=admin_commands_filter))
+    application.add_handler(CommandHandler("unmute", unmute_user, filters=admin_commands_filter))
+
+
     # Добавляем обработчик для ответов админов в группе
     # Он должен стоять ПЕРЕД обработчиком сообщений от пользователей
     application.add_handler(MessageHandler(
-        filters.Chat(chat_id=ADMIN_GROUP_ID) & filters.REPLY & ~filters.COMMAND,
+        filters.Chat(chat_id=ADMIN_GROUP_ID) & filters.REPLY & ~filters.COMMAND, # Ответы админов не должны быть командами
         reply_to_user
     ))
 
