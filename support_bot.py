@@ -90,32 +90,40 @@ async def forward_to_admins(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     """Пересылает сообщение пользователя в админский чат."""
     user = update.effective_user
     message = update.message
+    logger.info(f"Получено сообщение от пользователя {user.full_name} (ID: {user.id})")
 
     # Не пересылаем сообщения от админов, чтобы избежать путаницы
     if user.id in ADMIN_IDS:
+        logger.info(f"Сообщение от админа {user.full_name}. Пересылка не требуется.")
         return
 
-    # Формируем красивое сообщение для админов
-    header = (
-        f"❗️ Новое обращение от пользователя:\n"
-        f"Имя: {user.full_name}\n"
-        f"ID: `{user.id}`" # ID нужен для ответа
-    )
-    
-    # Отправляем заголовок в админский чат
-    await context.bot.send_message(
-        chat_id=ADMIN_GROUP_ID,
-        text=header,
-        parse_mode='Markdown'
-    )
-    # Пересылаем само сообщение пользователя
-    await context.bot.forward_message(
-        chat_id=ADMIN_GROUP_ID,
-        from_chat_id=user.id,
-        message_id=message.message_id
-    )
-    
-    await update.message.reply_text("✅ Ваше сообщение отправлено в поддержку. Ожидайте, пожалуйста, ответа.")
+    try:
+        # Формируем красивое сообщение для админов
+        header = (
+            f"❗️ Новое обращение от пользователя:\n"
+            f"Имя: {user.full_name}\n"
+            f"ID: `{user.id}`" # ID нужен для ответа
+        )
+        
+        # Отправляем заголовок в админский чат
+        logger.info(f"Пересылка сообщения в группу {ADMIN_GROUP_ID}")
+        await context.bot.send_message(
+            chat_id=ADMIN_GROUP_ID,
+            text=header,
+            parse_mode='Markdown'
+        )
+        # Пересылаем само сообщение пользователя
+        await context.bot.forward_message(
+            chat_id=ADMIN_GROUP_ID,
+            from_chat_id=user.id,
+            message_id=message.message_id
+        )
+        
+        await update.message.reply_text("✅ Ваше сообщение отправлено в поддержку. Ожидайте, пожалуйста, ответа.")
+        logger.info(f"Сообщение от {user.id} успешно переслано. Пользователю отправлено подтверждение.")
+    except Exception as e:
+        logger.error(f"Ошибка при пересылке сообщения от {user.id}: {e}", exc_info=True)
+        await update.message.reply_text("Произошла внутренняя ошибка при отправке вашего сообщения. Мы уже уведомлены и работаем над решением.")
 
 # Функция для ответа администратора пользователю
 async def reply_to_user(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -183,7 +191,7 @@ async def main() -> None:
 
     # Добавляем обработчик для всех остальных текстовых сообщений от пользователей
     application.add_handler(MessageHandler(
-        filters.TEXT & ~filters.COMMAND, 
+        filters.ChatType.PRIVATE & filters.TEXT & ~filters.COMMAND, 
         forward_to_admins
     ))
     
