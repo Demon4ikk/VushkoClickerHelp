@@ -3,6 +3,7 @@ import os
 import nest_asyncio
 
 import re
+import datetime
 import asyncio
 from aiohttp import web
 
@@ -37,6 +38,9 @@ except (TypeError, ValueError):
 if not all([BOT_TOKEN, ADMIN_IDS, ADMIN_GROUP_ID]):
     # Эта ошибка будет видна в логах на сервере, если вы забудете что-то указать
     raise RuntimeError("Не все переменные окружения установлены! (BOT_TOKEN, ADMIN_IDS, ADMIN_GROUP_ID)")
+
+# Кулдаун для пользователей, чтобы избежать спама (в секундах)
+USER_COOLDOWN_SECONDS = 10
 
 # --- КОНЕЦ НАСТРОЕК ---
 
@@ -100,12 +104,31 @@ async def forward_to_admins(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         logger.info(f"Получено сообщение от заблокированного пользователя {user.id}. Игнорируем.")
         return # Молча игнорируем
 
+    # Проверяем кулдаун, чтобы пользователи не спамили
+    now = datetime.datetime.now().timestamp()
+    last_message_time = context.user_data.get("last_message_time", 0)
+
+    if now - last_message_time < USER_COOLDOWN_SECONDS:
+        last_warning_time = context.user_data.get("last_cooldown_warning", 0)
+        # Отправляем предупреждение не чаще, чем раз в кулдаун, чтобы не спамить в ответ
+        if now - last_warning_time > USER_COOLDOWN_SECONDS:
+            seconds_left = int(USER_COOLDOWN_SECONDS - (now - last_message_time))
+            await update.message.reply_text(
+                f"⏳ Вы отправляете сообщения слишком часто. Пожалуйста, подождите ещё {seconds_left} сек."
+            )
+            context.user_data["last_cooldown_warning"] = now
+        logger.info(f"Сообщение от пользователя {user.id} проигнорировано из-за кулдауна.")
+        return
+
     logger.info(f"Получено сообщение от пользователя {user.full_name} (ID: {user.id})")
 
     # Не пересылаем сообщения от админов, чтобы избежать путаницы
     if user.id in ADMIN_IDS:
         logger.info(f"Сообщение от админа {user.full_name}. Пересылка не требуется.")
         return
+
+    # Если кулдаун прошел, обновляем время последнего сообщения
+    context.user_data["last_message_time"] = now
 
     try:
         # Формируем красивое сообщение для админов
